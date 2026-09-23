@@ -2,13 +2,16 @@
 name: Build APK Jadwal Shalat
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  build-apk:
+  build:
     name: Build Android APK
     runs-on: ubuntu-22.04
 
@@ -16,56 +19,109 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java 8
+      # Java 17 wajib digunakan terlebih dahulu
+      # untuk Android SDK Command Line Tools terbaru.
+      - name: Setup Java 17 for Android SDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-28" \
+            "build-tools;28.0.3"
+
+      # Setelah SDK siap, kembali ke Java 8
+      # sesuai Android Gradle Plugin 3.5.4.
+      - name: Setup Java 8 for Gradle
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '8'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK
-        run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "platforms;android-28" "build-tools;28.0.3"
-
-      - name: Extract Android project
-        run: |
-          mkdir -p extracted
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "File ZIP project tidak ditemukan"
-            exit 1
-          fi
-
-          echo "Menggunakan file: $ZIP_FILE"
-          unzip -q "$ZIP_FILE" -d extracted
-
       - name: Find Android project
+        shell: bash
         run: |
-          SETTINGS_FILE=$(find extracted -name "settings.gradle" -type f | head -n 1)
+          set -e
 
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "settings.gradle tidak ditemukan"
+          echo "Isi repository:"
+          find . -maxdepth 3 -type f | sort
+
+          PROJECT_DIR=""
+
+          if [ -f "settings.gradle" ]; then
+            PROJECT_DIR="."
+          else
+            PROJECT_DIR=$(find . -name "settings.gradle" \
+              -not -path "*/.git/*" \
+              -print -quit | xargs -r dirname)
+          fi
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: settings.gradle tidak ditemukan."
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          PROJECT_DIR=$(realpath "$PROJECT_DIR")
+
+          echo "Android project ditemukan di:"
+          echo "$PROJECT_DIR"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Project ditemukan di: $PROJECT_DIR"
+      - name: Setup Gradle 5.6.4
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '5.6.4'
+
+      - name: Check Java and Gradle
+        shell: bash
+        run: |
+          java -version
+          gradle --version
 
       - name: Build APK
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          cd "$PROJECT_DIR"
-          gradle --version
-          gradle assembleDebug --no-daemon
+          set -e
+
+          gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Find generated APK
+        shell: bash
+        run: |
+          set -e
+
+          echo "Mencari APK hasil build..."
+
+          find "$PROJECT_DIR" \
+            -type f \
+            -name "*.apk" \
+            -print
+
+          APK_COUNT=$(find "$PROJECT_DIR" \
+            -type f \
+            -name "*.apk" | wc -l)
+
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "ERROR: APK tidak ditemukan."
+            exit 1
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: jadwal-shalat-launcher-apk
+          name: jadwal-shalat-launcher-debug
           path: |
-            extracted/**/*.apk
+            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
