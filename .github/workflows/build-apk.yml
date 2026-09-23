@@ -16,23 +16,21 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      # 1. Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Java 17 untuk Android SDK terbaru
-      - name: Setup Java 17 for Android SDK
+      # Java 17 wajib dipasang sebelum Android SDK
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # 3. Setup Android SDK
+      # Setup Android SDK tanpa sdkmanager tools
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # 4. Install Android SDK packages
-      # Jangan menambahkan package "tools"
+      # Install hanya package yang dibutuhkan
       - name: Install Android SDK packages
         shell: bash
         run: |
@@ -45,32 +43,27 @@ jobs:
             "platforms;android-28" \
             "build-tools;28.0.3"
 
-          yes | sdkmanager --licenses || true
-
-      # 5. Cari file ZIP project Android
+      # Cari ZIP project Android
       - name: Find Android project ZIP
-        id: find_zip
         shell: bash
         run: |
           set -e
 
-          echo "Mencari ZIP project Android..."
-
           ZIP_FILE=$(find . \
-            -maxdepth 4 \
+            -maxdepth 5 \
             -type f \
             -iname "*.zip" \
             | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: File ZIP project Android tidak ditemukan."
+            echo "ERROR: ZIP project Android tidak ditemukan."
             exit 1
           fi
 
           echo "ZIP ditemukan: $ZIP_FILE"
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-      # 6. Ekstrak project Android
+      # Ekstrak project
       - name: Extract Android project
         shell: bash
         run: |
@@ -81,109 +74,67 @@ jobs:
 
           unzip -q "$ZIP_FILE" -d android-project
 
-          echo "Isi hasil ekstraksi:"
           find android-project -maxdepth 4 -type f | head -n 100
 
-      # 7. Cari folder project Android
+      # Cari settings.gradle
       - name: Find Android project folder
         shell: bash
         run: |
           set -e
 
-          PROJECT_DIR=""
+          SETTINGS_FILE=$(find android-project \
+            -type f \
+            -name "settings.gradle" \
+            | head -n 1)
 
-          if [ -f "android-project/settings.gradle" ]; then
-            PROJECT_DIR="android-project"
-          else
-            SETTINGS_FILE=$(find android-project \
-              -type f \
-              -name "settings.gradle" \
-              -not -path "*/.git/*" \
-              | head -n 1)
-
-            if [ -n "$SETTINGS_FILE" ]; then
-              PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-            fi
-          fi
-
-          if [ -z "$PROJECT_DIR" ]; then
+          if [ -z "$SETTINGS_FILE" ]; then
             echo "ERROR: settings.gradle tidak ditemukan."
-            find android-project -maxdepth 5 -type f
             exit 1
           fi
 
-          echo "Folder project Android: $PROJECT_DIR"
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+
+          echo "Project Android: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      # 8. Java 8 untuk Gradle lama dan Android Gradle Plugin 3.5.4
+      # Java 8 untuk Gradle lama
       - name: Setup Java 8 for Gradle
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '8'
 
-      # 9. Periksa Java dan Android SDK
-      - name: Check Java and Android SDK
-        shell: bash
-        run: |
-          set -e
-
-          echo "Java version:"
-          java -version
-
-          echo "JAVA_HOME:"
-          echo "$JAVA_HOME"
-
-          echo "Android SDK:"
-          echo "$ANDROID_SDK_ROOT"
-
-          echo "Build tools:"
-          ls -la "$ANDROID_SDK_ROOT/build-tools/28.0.3"
-
-      # 10. Download Gradle 5.6.4
+      # Download Gradle 5.6.4
       - name: Setup Gradle 5.6.4
         shell: bash
         run: |
           set -e
 
-          if [ ! -d "$HOME/gradle-5.6.4" ]; then
-            wget -q \
-              https://services.gradle.org/distributions/gradle-5.6.4-bin.zip \
-              -O "$HOME/gradle-5.6.4-bin.zip"
+          wget -q \
+            https://services.gradle.org/distributions/gradle-5.6.4-bin.zip \
+            -O "$HOME/gradle.zip"
 
-            unzip -q \
-              "$HOME/gradle-5.6.4-bin.zip" \
-              -d "$HOME"
-          fi
+          unzip -q "$HOME/gradle.zip" -d "$HOME"
 
           "$HOME/gradle-5.6.4/bin/gradle" --version
 
-      # 11. Build APK
+      # Build APK
       - name: Build APK
         shell: bash
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -e
 
-          chmod +x "$HOME/gradle-5.6.4/bin/gradle"
-
           "$HOME/gradle-5.6.4/bin/gradle" \
             assembleDebug \
             --no-daemon \
             --stacktrace
 
-      # 12. Cari APK hasil build
+      # Cari APK
       - name: Find generated APK
         shell: bash
         run: |
           set -e
-
-          echo "Mencari APK hasil build..."
-
-          find "$PROJECT_DIR" \
-            -type f \
-            -iname "*.apk" \
-            -print
 
           APK_FILE=$(find "$PROJECT_DIR" \
             -type f \
@@ -198,20 +149,10 @@ jobs:
           echo "APK ditemukan: $APK_FILE"
           echo "APK_FILE=$APK_FILE" >> "$GITHUB_ENV"
 
-      # 13. Upload APK sebagai artifact
+      # Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: jadwal-shalat-launcher-debug
           path: ${{ env.APK_FILE }}
           if-no-files-found: error
-
-      # 14. Ringkasan build
-      - name: Build summary
-        shell: bash
-        run: |
-          echo "## Build APK Jadwal Shalat" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Build berhasil." >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "APK: $APK_FILE" >> "$GITHUB_STEP_SUMMARY"
